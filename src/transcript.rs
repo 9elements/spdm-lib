@@ -161,7 +161,7 @@ impl<'a> TranscriptManager<'a> {
         hash_ctx
             .finalize(hash)
             .await
-            .map_err(|e| TranscriptError::Hash(e))?;
+            .map_err(TranscriptError::Hash)?;
 
         match context {
             TranscriptContext::M1 =>  {self.hash_ctx_m1.reset(); self.m1_ctx_ready = false; },
