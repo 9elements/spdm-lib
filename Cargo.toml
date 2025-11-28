@@ -12,6 +12,7 @@ crypto = []
 
 [dependencies]
 bitfield = "0.14.0"
+smlang = "0.8.0"
 zerocopy = { version = "0.8.17", features = ["derive"] }
 
 [dev-dependencies]

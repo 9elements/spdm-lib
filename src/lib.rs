@@ -30,5 +30,8 @@ pub mod measurements;
 // Chunking context for large messages
 pub mod chunk_ctx;
 
-// Platform-specific traits
+// Platform-specific implementations
 pub mod platform;
+
+// Standard implementations for the requester.
+pub mod requester;

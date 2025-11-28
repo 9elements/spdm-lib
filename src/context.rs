@@ -38,6 +38,7 @@ pub struct SpdmContext<'a> {
 }
 
 impl<'a> SpdmContext<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         supported_versions: &'a [SpdmVersion],
         spdm_transport: &'a mut dyn SpdmTransport,
@@ -51,9 +52,7 @@ impl<'a> SpdmContext<'a> {
         evidence: &'a dyn SpdmEvidence,
     ) -> SpdmResult<Self> {
         validate_supported_versions(supported_versions)?;
-
         validate_device_algorithms(&local_algorithms)?;
-
         validate_cert_store(device_certs_store)?;
 
         Ok(Self {
