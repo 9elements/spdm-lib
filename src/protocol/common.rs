@@ -6,7 +6,7 @@ use crate::protocol::{version::SpdmVersion, REQUESTER_CONTEXT_LEN, SPDM_CONTEXT_
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum ReqRespCode {
+pub enum ReqRespCode {
     GetVersion = 0x84,
     Version = 0x04,
     GetCapabilities = 0xE1,
@@ -75,9 +75,17 @@ impl ReqRespCode {
 
         Ok(context)
     }
+
+    pub(crate) fn is_response(&self) -> bool {
+        *self as u8 <= 0x7F
+    }
+
+    pub(crate) fn is_request(&self) -> bool {
+        !self.is_response()
+    }
 }
 
-#[derive(FromBytes, IntoBytes, Immutable)]
+#[derive(FromBytes, IntoBytes, Immutable, Clone)]
 #[repr(C)]
 pub(crate) struct SpdmMsgHdr {
     version: u8,
@@ -97,7 +105,8 @@ impl SpdmMsgHdr {
     }
 
     pub(crate) fn req_resp_code(&self) -> SpdmResult<ReqRespCode> {
-        self.req_resp_code.try_into()
+        // self.req_resp_code.try_into()
+        ReqRespCode::try_from(self.req_resp_code)
     }
 }
 
