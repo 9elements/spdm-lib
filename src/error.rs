@@ -53,4 +53,12 @@ pub enum CommandError {
     Transcript(TranscriptError),
     Measurement(MeasurementsError),
     InvalidResponse,
+    /// An invalid state was encountered (this is likely a bug)
+    InvalidState,
+    /// This is a Bug
+    ///
+    /// Used in spots which should be infailable.
+    /// This can either be a bug in this crate,
+    /// in a dependency, or a uncaught platform misbehaviour.
+    InternalError,
 }
