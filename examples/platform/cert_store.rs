@@ -11,10 +11,17 @@ use p384::{
     ecdsa::{signature::Signer, Signature, SigningKey},
     SecretKey,
 };
+use zerocopy::FromBytes;
 
 use super::certs::{STATIC_ATTESTATION_CERT, STATIC_CERTIFICATE_CHAIN, STATIC_ROOT_CA_CERT};
-use spdm_lib::protocol::algorithms::{AsymAlgo, ECC_P384_SIGNATURE_SIZE, SHA384_HASH_SIZE};
-use spdm_lib::protocol::certs::{CertificateInfo, KeyUsageMask};
+use spdm_lib::protocol::{
+    algorithms::{AsymAlgo, ECC_P384_SIGNATURE_SIZE, SHA384_HASH_SIZE},
+    SpdmCertChainHeader,
+};
+use spdm_lib::protocol::{
+    certs::{CertificateInfo, KeyUsageMask},
+    BaseHashAlgoType,
+};
 use spdm_lib::{
     cert_store::{CertStoreError, CertStoreResult, PeerCertStore, ReassemblyStatus, SpdmCertStore},
     error::PlatformError,
@@ -281,6 +288,41 @@ impl Default for PeerSlot {
     }
 }
 
+impl PeerSlot {
+    /// Get the digest for the root certificate of the chain
+    ///
+    /// # Arguments
+    /// * `hash_algo` - The hash algorithm negotiated with the peer.
+    fn get_root_hash(&self, hash_algo: BaseHashAlgoType) -> Option<&[u8]> {
+        let (length, rest) = SpdmCertChainHeader::ref_from_prefix(&self.cert_chain).ok()?;
+        if length.get_length() != self.cert_chain.len() as u32 {
+            println!(
+                "[Error] cert chain length mismatch (expected {}, got {})",
+                length.get_length(),
+                self.cert_chain.len()
+            );
+            return None;
+        }
+        Some(&rest[..hash_algo.hash_byte_size()])
+    }
+    /// Get the DER x509 certificate chain
+    ///
+    /// # Arguments
+    /// * `hash_algo` - The hash algorithm negotiated with the peer.
+    fn get_cert_chain(&self, hash_algo: BaseHashAlgoType) -> Option<&[u8]> {
+        let (length, rest) = SpdmCertChainHeader::ref_from_prefix(&self.cert_chain).ok()?;
+        if length.get_length() != self.cert_chain.len() as u32 {
+            println!(
+                "[Error] cert chain length mismatch (expected {}, got {})",
+                length.get_length(),
+                self.cert_chain.len()
+            );
+            return None;
+        }
+        Some(&rest[hash_algo.hash_byte_size()..])
+    }
+}
+
 /// Concrete implementation of `PeerCertStore` for demonstration purposes.
 /// This example store manages a single certificate slot (slot 0) and allows
 /// setting and retrieving the certificate chain, digest, key pair ID, certificate info,
@@ -330,19 +372,13 @@ impl PeerCertStore for ExamplePeerCertStore {
         Ok(spdm_lib::cert_store::ReassemblyStatus::InProgress)
     }
 
-    fn reset(&mut self, _slot_id: u8) {
-        todo!()
+    fn reset(&mut self, slot_id: u8) {
+        if let Some(Some(slot)) = self.peer_slots.get_mut(slot_id as usize) {
+            *slot = PeerSlot::default();
+        }
     }
 
-    fn get_root_hash(&self, _slot_id: u8) -> Option<&[u8]> {
-        todo!()
-    }
-
-    fn get_raw_chain(&self, _slot_id: u8) -> Option<&[u8]> {
-        todo!()
-    }
-
-    fn get_cert_chain(&self, slot_id: u8) -> CertStoreResult<&[u8]> {
+    fn get_raw_chain(&self, slot_id: u8) -> Result<&[u8], CertStoreError> {
         let slot = self
             .peer_slots
             .get(slot_id as usize)
@@ -350,6 +386,17 @@ impl PeerCertStore for ExamplePeerCertStore {
             .as_ref()
             .ok_or(CertStoreError::PlatformError)?;
         Ok(&slot.cert_chain)
+    }
+
+    fn get_cert_chain(&self, slot_id: u8, hash_algo: BaseHashAlgoType) -> CertStoreResult<&[u8]> {
+        let slot = self
+            .peer_slots
+            .get(slot_id as usize)
+            .ok_or(CertStoreError::InvalidSlotId(slot_id))?
+            .as_ref()
+            .ok_or(CertStoreError::PlatformError)?;
+        slot.get_cert_chain(hash_algo)
+            .ok_or(CertStoreError::CertReadError)
     }
 
     /// Set the supported slots bit mask and initialize PeerSlot entries for any newly supported slots.  
@@ -490,5 +537,16 @@ impl PeerCertStore for ExamplePeerCertStore {
             .ok_or(CertStoreError::PlatformError)?;
         slot.keypair_id = Some(keypair);
         Ok(())
+    }
+
+    fn get_root_hash(&self, slot_id: u8, hash_algo: BaseHashAlgoType) -> CertStoreResult<&[u8]> {
+        let slot = self
+            .peer_slots
+            .get(slot_id as usize)
+            .ok_or(CertStoreError::InvalidSlotId(slot_id))?
+            .as_ref()
+            .ok_or(CertStoreError::PlatformError)?;
+        slot.get_root_hash(hash_algo)
+            .ok_or(CertStoreError::CertReadError)
     }
 }
