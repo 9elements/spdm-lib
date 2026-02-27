@@ -13,12 +13,11 @@
 // limitations under the License.
 use crate::chunk_ctx::ChunkError;
 use crate::chunk_ctx::LargeResponse;
-use crate::codec::{Codec, CommonCodec, MessageBuf};
+use crate::codec::{Codec, MessageBuf};
 use crate::commands::chunk::{
-    compute_chunk_size, max_chunked_resp_size, ChunkGet, ChunkResponseFixed, ChunkSenderAttr,
-    LargeResponseSize,
+    max_chunked_resp_size, ChunkGet, ChunkResponseFixed, ChunkSenderAttr, LargeResponseSize,
 };
-use crate::commands::error_rsp::ErrorCode;
+use crate::commands::error::ErrorCode;
 use crate::context::SpdmContext;
 use crate::error::{CommandError, CommandResult};
 use crate::protocol::*;
@@ -38,7 +37,7 @@ fn process_chunk_get<'a>(
     if connection_version < SpdmVersion::V12 {
         Err(ctx.generate_error_response(req_payload, ErrorCode::UnsupportedRequest, 0, None))?;
     }
-    // Decode the request payload
+
     let chunk_get_req = ChunkGet::decode(req_payload).map_err(|_| {
         ctx.generate_error_response(req_payload, ErrorCode::InvalidRequest, 0, None)
     })?;
@@ -143,7 +142,7 @@ fn generate_chunk_response<'a>(
         .encode(rsp)
         .map_err(|e| (false, CommandError::Codec(e)))?;
 
-    let (chunk_size, last_chunk) = compute_chunk_size(ctx, chunk_seq_num);
+    let (chunk_size, last_chunk) = ChunkResponseFixed::compute_chunk_size(ctx, chunk_seq_num);
     if chunk_size > ctx.large_resp_context.large_response_size() {
         Err((false, CommandError::InvalidChunkContext))?;
     }
@@ -167,6 +166,17 @@ fn generate_chunk_response<'a>(
         .map_err(|e| (false, CommandError::Codec(e)))
 }
 
+/// From the SPDM0274 Spec:
+///
+/// > To ensure the general interoperability and reliability of this transfer mechanism,
+/// > these messages shall be prohibited from being transferred in chunks using this
+/// > transfer mechanism:
+///
+/// - `GET_VERSION`
+/// - `VERSION`
+/// - `GET_CAPABILITIES`
+/// - `CAPABILITIES` with `Param1` in the `GET_CAPABILITIES` request set to `0`.
+/// - `ERROR`
 pub(crate) fn handle_chunk_get<'a>(
     ctx: &mut SpdmContext<'a>,
     spdm_hdr: SpdmMsgHdr,

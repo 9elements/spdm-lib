@@ -16,7 +16,7 @@ use crate::codec::{Codec, MessageBuf};
 use crate::commands::algorithms::selected_measurement_specification;
 use crate::commands::challenge::{ChallengeAuthRspBase, ChallengeReq, MeasurementSummaryHashType};
 use crate::commands::digests::compute_cert_chain_hash;
-use crate::commands::error_rsp::ErrorCode;
+use crate::commands::error::ErrorCode;
 use crate::context::SpdmContext;
 use crate::error::{CommandError, CommandResult, PlatformError};
 use crate::platform::hash::SpdmHashAlgoType;

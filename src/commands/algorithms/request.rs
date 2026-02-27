@@ -15,7 +15,7 @@
 use crate::{
     codec::{Codec, MessageBuf},
     commands::algorithms::{AlgStructure, AlgorithmsResp, ExtendedAlgo, NegotiateAlgorithmsReq},
-    commands::error_rsp::ErrorCode,
+    commands::error::ErrorCode,
     context::SpdmContext,
     error::{CommandError, CommandResult},
     protocol::{DeviceAlgorithms, SpdmMsgHdr},

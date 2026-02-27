@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::commands::error_rsp::ErrorCode;
+use crate::commands::error::ErrorCode;
 use crate::protocol::CapabilityFlags;
 use crate::{codec::MessageBuf, context::SpdmContext, error::CommandResult, protocol::SpdmMsgHdr};
 

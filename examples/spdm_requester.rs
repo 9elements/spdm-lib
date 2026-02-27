@@ -21,6 +21,7 @@ use std::net::TcpStream;
 use clap::Parser;
 use der::{Decode, Encode};
 use p384::ecdsa::{Signature, VerifyingKey};
+use spdm_lib::chunk_ctx::ChunkError;
 use spdm_lib::codec::MessageBuf;
 use spdm_lib::commands::certificate::request::generate_get_certificate;
 use spdm_lib::commands::challenge::{
@@ -31,7 +32,7 @@ use spdm_lib::commands::measurements::request::{
 };
 use spdm_lib::commands::measurements::MeasurementOperation;
 use spdm_lib::context::SpdmContext;
-use spdm_lib::error::SpdmError;
+use spdm_lib::error::{CommandError, SpdmError};
 use spdm_lib::protocol::algorithms::{
     AeadCipherSuite, AlgorithmPriorityTable, BaseAsymAlgo, BaseHashAlgo, DeviceAlgorithms,
     DheNamedGroup, KeySchedule, LocalDeviceAlgorithms, MeasurementHashAlgo,
@@ -229,8 +230,12 @@ fn full_flow(stream: TcpStream, config: &RequesterConfig) -> IoResult<()> {
     }
 
     // Process SPDM messages using the context
-    let mut buffer = [0u8; 4096];
+    // let mut buffer = [0u8; capabilities.data_transfer_size];
+    let mut buffer = [0u8; 1024];
     let mut message_buffer = MessageBuf::new(&mut buffer);
+
+    let mut large_buffer = [0u8; 8192];
+    let mut large_response_buffer = MessageBuf::new(&mut large_buffer);
     // For now, we just want to show, that the VCA (Version, Capability, Auth) flow works as expected
     // For that, we need to do the following:
     // 1.1 Send GET_VERSION
@@ -279,6 +284,24 @@ fn full_flow(stream: TcpStream, config: &RequesterConfig) -> IoResult<()> {
     spdm_context
         .requester_send_request(&mut message_buffer, EID)
         .unwrap();
+
+    // CAPABILITES is the first response that might require chunking!
+    match spdm_context.requester_process_message(&mut message_buffer) {
+        // For now ig we have to live with it like this.
+        // An alternative would be to poll our own context to check if the chunking
+        // was initialized and then proceed with the chunk retrieval and assembly.
+        Err(SpdmError::Command(CommandError::Chunk(ChunkError::None))) => {
+            message_buffer.reset();
+            spdm_context
+                .requester_retrieve_large_response(
+                    &mut message_buffer,
+                    EID,
+                    &mut large_response_buffer,
+                )
+                .unwrap();
+        }
+        e => e.unwrap(),
+    };
 
     if config.verbose {
         println!(
@@ -588,6 +611,22 @@ fn full_flow(stream: TcpStream, config: &RequesterConfig) -> IoResult<()> {
     } else {
         println!("Measurements retrieved successfully")
     }
+
+    // Chunking WIP
+    // match spdm_context.requester_process_message(&mut message_buffer) {
+    //     // For now ig we have to live with it like this.
+    //     // An alternative would be to poll our own context to check if the chunking
+    //     // was initialized and then proceed with the chunk retrieval and assembly.
+    //     SpdmError::Command(CommandError::Chunk(ChunkError::None)) => {
+    //         message_buffer.reset();
+    //         spdm_context.requester_retrieve_large_response(
+    //             &mut message_buffer,
+    //             EID,
+    //             &mut large_response_buffer,
+    //         )?;
+    //     }
+    //     SpdmError(e) => e,
+    // };
 
     Ok(())
 }

@@ -21,7 +21,7 @@ use crate::{
     transcript::TranscriptContext,
 };
 
-use crate::commands::error_rsp::ErrorCode;
+use crate::commands::error::ErrorCode;
 use crate::commands::version::{VersionNumberEntry, VersionReqPayload, VersionRespCommon};
 
 use crate::protocol::SpdmVersion;

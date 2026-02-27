@@ -33,6 +33,7 @@ pub(crate) struct ChunkGet {
 }
 impl CommonCodec for ChunkGet {}
 
+impl ChunkGet {}
 #[derive(FromBytes, IntoBytes, Immutable)]
 #[repr(C, packed)]
 /// The fixed fields of the `CHUNK_RESPONSE` message. The actual response payload
@@ -56,6 +57,29 @@ struct ChunkResponseFixed {
     chunk_size: u32,
 }
 impl CommonCodec for ChunkResponseFixed {}
+
+impl ChunkResponseFixed {
+    // Computes the chunk size based on the context and the chunk sequence number
+    // Returns the chunk size and a boolean indicating if this is the last chunk
+    pub(crate) fn compute_chunk_size(ctx: &SpdmContext, chunk_seq_num: u16) -> (usize, bool) {
+        let extra_field_size = if chunk_seq_num == 0 {
+            size_of::<LargeResponseSize>()
+        } else {
+            0
+        };
+        let chunk_size = ctx
+            .min_data_transfer_size()
+            .saturating_sub(size_of::<SpdmMsgHdr>() + size_of::<Self>() + extra_field_size);
+
+        let (is_last_chunk, remaining_len) = ctx.large_resp_context.last_chunk(chunk_size);
+
+        if is_last_chunk {
+            (remaining_len, true)
+        } else {
+            (chunk_size, false)
+        }
+    }
+}
 
 bitfield! {
     #[derive(FromBytes, IntoBytes, Immutable)]
@@ -90,10 +114,10 @@ struct LargeResponseSize(u32);
 impl CommonCodec for LargeResponseSize {}
 
 #[derive(FromBytes, IntoBytes, Immutable)]
-#[repr(C)]
+#[repr(C, packed)]
 /// The fixed size components of the `CHUNK_SEND` request.
 /// When sent, this struct is followed by
-/// - `LargeMessageSize` field (only present in the first chunk, i.e., when `ChunkSeqNo` is 0)
+/// - `LargeMessageSize` field (only present in the first chunk, i.e., when `ChunkSeqNo` is 0). See [LargeMessageSize].
 pub(crate) struct ChunkSendFixed {
     param1: ChunkSenderAttr,
 
@@ -119,7 +143,30 @@ impl ChunkSendFixed {
             chunk_size,
         }
     }
+
+    // Computes the chunk size based on the context and the chunk sequence number
+    // Returns the chunk size and a boolean indicating if this is the last chunk
+    pub(crate) fn compute_chunk_size(ctx: &SpdmContext, chunk_seq_num: u16) -> (usize, bool) {
+        let extra_field_size = if chunk_seq_num == 0 {
+            size_of::<LargeMessageSize>()
+        } else {
+            0
+        };
+        let chunk_size = ctx
+            .min_data_transfer_size()
+            .saturating_sub(size_of::<SpdmMsgHdr>() + size_of::<Self>() + extra_field_size);
+
+        let (is_last_chunk, remaining_len) = ctx.large_resp_context.last_chunk(chunk_size);
+
+        if is_last_chunk {
+            (remaining_len, true)
+        } else {
+            (chunk_size, false)
+        }
+    }
 }
+
+impl CommonCodec for ChunkSendFixed {}
 
 #[derive(FromBytes, IntoBytes, Immutable)]
 #[repr(C)]
@@ -128,7 +175,7 @@ struct LargeMessageSize(u32);
 impl CommonCodec for LargeMessageSize {}
 
 #[derive(FromBytes, IntoBytes, Immutable)]
-#[repr(C)]
+#[repr(C, packed)]
 /// # Note
 /// This struct may be followed by the variable length field `ResponseToLargeRequest`.
 /// `ResponseToLargeRequest` shall be present on the last chunk (that is, when LastChunk is set),
@@ -155,25 +202,4 @@ pub(crate) fn max_chunked_resp_size(ctx: &SpdmContext) -> usize {
     // compute max possible response size that can be transferred in chunks is less than the large response size
     (min_data_transfer_size).saturating_sub(fixed_chunk_resp_size) * MAX_NUM_CHUNKS as usize
         - size_of::<u32>()
-}
-
-// Computes the chunk size based on the context and the chunk sequence number
-// Returns the chunk size and a boolean indicating if this is the last chunk
-fn compute_chunk_size(ctx: &SpdmContext, chunk_seq_num: u16) -> (usize, bool) {
-    let extra_field_size = if chunk_seq_num == 0 {
-        size_of::<LargeResponseSize>()
-    } else {
-        0
-    };
-    let chunk_size = ctx.min_data_transfer_size().saturating_sub(
-        size_of::<SpdmMsgHdr>() + size_of::<ChunkResponseFixed>() + extra_field_size,
-    );
-
-    let (is_last_chunk, remaining_len) = ctx.large_resp_context.last_chunk(chunk_size);
-
-    if is_last_chunk {
-        (remaining_len, true)
-    } else {
-        (chunk_size, false)
-    }
 }

@@ -16,7 +16,7 @@
 use crate::cert_store::CertStoreError;
 use crate::chunk_ctx::ChunkError;
 use crate::codec::CodecError;
-use crate::commands::error_rsp::ErrorCode;
+use crate::commands::error::ErrorCode;
 use crate::measurements::common::MeasurementsError;
 use crate::platform::evidence::SpdmEvidenceError;
 use crate::platform::hash::SpdmHashError;
