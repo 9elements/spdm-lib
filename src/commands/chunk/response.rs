@@ -14,81 +14,15 @@
 use crate::chunk_ctx::ChunkError;
 use crate::chunk_ctx::LargeResponse;
 use crate::codec::{Codec, CommonCodec, MessageBuf};
+use crate::commands::chunk::{
+    compute_chunk_size, max_chunked_resp_size, ChunkGet, ChunkResponseFixed, ChunkSenderAttr,
+    LargeResponseSize,
+};
 use crate::commands::error_rsp::ErrorCode;
 use crate::context::SpdmContext;
 use crate::error::{CommandError, CommandResult};
 use crate::protocol::*;
 use crate::state::ConnectionState;
-use bitfield::bitfield;
-use core::mem::size_of;
-use zerocopy::{FromBytes, Immutable, IntoBytes};
-
-const MAX_NUM_CHUNKS: u16 = u16::MAX;
-
-#[derive(FromBytes, IntoBytes, Immutable)]
-#[repr(C)]
-struct ChunkGetReq {
-    param1: u8,
-    handle: u8,
-    chunk_seq_num: u16,
-}
-impl CommonCodec for ChunkGetReq {}
-
-#[derive(FromBytes, IntoBytes, Immutable)]
-#[repr(C, packed)]
-struct ChunkResponseFixed {
-    chunk_sender_attr: ChunkSenderAttr,
-    handle: u8,
-    chunk_seq_num: u16,
-    reserved: u16,
-    chunk_size: u32,
-}
-impl CommonCodec for ChunkResponseFixed {}
-
-bitfield! {
-    #[derive(FromBytes, IntoBytes, Immutable)]
-    #[repr(C)]
-    struct ChunkSenderAttr(u8);
-    impl Debug;
-    u8;
-    pub last_chunk, set_last_chunk: 0, 0;
-    reserved, _: 7, 1;
-}
-
-#[derive(FromBytes, IntoBytes, Immutable)]
-#[repr(C)]
-struct LargeResponseSize(u32);
-impl CommonCodec for LargeResponseSize {}
-
-pub(crate) fn max_chunked_resp_size(ctx: &SpdmContext) -> usize {
-    let min_data_transfer_size = ctx.min_data_transfer_size();
-    let fixed_chunk_resp_size = size_of::<SpdmMsgHdr>() + size_of::<ChunkResponseFixed>();
-
-    // compute max possible response size that can be transferred in chunks is less than the large response size
-    (min_data_transfer_size).saturating_sub(fixed_chunk_resp_size) * MAX_NUM_CHUNKS as usize
-        - size_of::<u32>()
-}
-
-// Computes the chunk size based on the context and the chunk sequence number
-// Returns the chunk size and a boolean indicating if this is the last chunk
-fn compute_chunk_size(ctx: &SpdmContext, chunk_seq_num: u16) -> (usize, bool) {
-    let extra_field_size = if chunk_seq_num == 0 {
-        size_of::<LargeResponseSize>()
-    } else {
-        0
-    };
-    let chunk_size = ctx.min_data_transfer_size().saturating_sub(
-        size_of::<SpdmMsgHdr>() + size_of::<ChunkResponseFixed>() + extra_field_size,
-    );
-
-    let (is_last_chunk, remaining_len) = ctx.large_resp_context.last_chunk(chunk_size);
-
-    if is_last_chunk {
-        (remaining_len, true)
-    } else {
-        (chunk_size, false)
-    }
-}
 
 fn process_chunk_get<'a>(
     ctx: &mut SpdmContext<'a>,
@@ -105,13 +39,13 @@ fn process_chunk_get<'a>(
         Err(ctx.generate_error_response(req_payload, ErrorCode::UnsupportedRequest, 0, None))?;
     }
     // Decode the request payload
-    let chunk_get_req = ChunkGetReq::decode(req_payload).map_err(|_| {
+    let chunk_get_req = ChunkGet::decode(req_payload).map_err(|_| {
         ctx.generate_error_response(req_payload, ErrorCode::InvalidRequest, 0, None)
     })?;
 
     if !ctx
         .large_resp_context
-        .valid(chunk_get_req.handle, chunk_get_req.chunk_seq_num)
+        .valid(chunk_get_req.handle, chunk_get_req.chunk_seq_no)
     {
         Err(ctx.generate_error_response(req_payload, ErrorCode::InvalidRequest, 0, None))?;
     }
@@ -123,7 +57,7 @@ fn process_chunk_get<'a>(
         Err(ctx.generate_error_response(req_payload, ErrorCode::ResponseTooLarge, 0, None))?;
     }
 
-    Ok((chunk_get_req.handle, chunk_get_req.chunk_seq_num))
+    Ok((chunk_get_req.handle, chunk_get_req.chunk_seq_no))
 }
 
 fn encode_chunk_resp_fixed_fields(
@@ -143,7 +77,7 @@ fn encode_chunk_resp_fixed_fields(
     let chunk_response_fixed = ChunkResponseFixed {
         chunk_sender_attr,
         handle,
-        chunk_seq_num,
+        chunk_seq_no: chunk_seq_num,
         reserved: 0,
         chunk_size: chunk_size as u32,
     };
