@@ -14,16 +14,16 @@
 
 // use crate::cert_mgr::DeviceCertsManager;
 use crate::cert_store::*;
-use crate::chunk_ctx::LargeResponseCtx;
-use crate::codec::{Codec, MessageBuf};
+use crate::chunk_ctx::{LargeRequestCtx, LargeResponseCtx};
+use crate::codec::{Codec, CodecError, MessageBuf};
 use crate::commands::capabilities::handle_capabilities_response;
 use crate::commands::challenge::handle_challenge_auth_response;
 use crate::commands::digests::{handle_digests_response, handle_get_digests};
-use crate::commands::error_rsp::{encode_error_response, ErrorCode};
+use crate::commands::error::{encode_error_response, ErrorCode, ErrorResponse, LargeResponseData};
 use crate::commands::measurements::request::handle_measurements_response;
 use crate::commands::version::handle_version_response;
 use crate::commands::{
-    algorithms, capabilities, certificate, challenge, chunk_get_rsp, measurements, version,
+    algorithms, capabilities, certificate, challenge, chunk, measurements, version,
 };
 
 use crate::error::*;
@@ -50,8 +50,9 @@ pub struct SpdmContext<'a> {
     pub(crate) local_algorithms: LocalDeviceAlgorithms<'a>,
     pub(crate) device_certs_store: &'a mut dyn SpdmCertStore,
     pub(crate) measurements: SpdmMeasurements,
-    pub(crate) large_resp_context: LargeResponseCtx,
     pub(crate) evidence: &'a dyn SpdmEvidence,
+    pub(crate) large_resp_context: LargeResponseCtx,
+    pub(crate) large_req_context: LargeRequestCtx,
 }
 
 impl<'a> SpdmContext<'a> {
@@ -82,6 +83,7 @@ impl<'a> SpdmContext<'a> {
             device_certs_store,
             measurements: SpdmMeasurements::default(),
             large_resp_context: LargeResponseCtx::default(),
+            large_req_context: LargeRequestCtx::default(),
             hash,
             rng,
             evidence,
@@ -136,12 +138,8 @@ impl<'a> SpdmContext<'a> {
 
         match self
             .requester_handle_response(resp_buffer)
-            .map_err(|(rsp, cmd_err)| {
-                if rsp {
-                    SpdmError::Command(cmd_err)
-                } else {
-                    SpdmError::InvalidParam
-                }
+            .map_err(|(_, cmd_err)| match cmd_err {
+                e => SpdmError::Command(e),
             }) {
             Ok(()) => {}
             Err(e) => {
@@ -151,8 +149,6 @@ impl<'a> SpdmContext<'a> {
         Ok(())
     }
 
-    // Use ReqRespCode as command issuer for now, until the correct state machine is in place
-    // TODO: implement in transport
     pub fn requester_send_request(
         &mut self,
         req_buf: &mut MessageBuf<'a>,
@@ -162,6 +158,116 @@ impl<'a> SpdmContext<'a> {
             .send_request(dst_eid, req_buf)
             .map_err(|_| SpdmError::InvalidParam)?;
 
+        Ok(())
+    }
+
+    /// Retrieve a large response that the responder signaled with
+    /// `ERROR(LargeResponse)`.
+    /// This function will block until all chunks are received.
+    ///
+    /// Must be called after [`requester_process_message`] returns
+    /// `Err(`[`SpdmError::LargeResponse`]`)`.  The method drives the
+    /// `CHUNK_GET` --> `CHUNK_RESPONSE` loop until the last chunk is received,
+    /// writing the reassembled payload into `output`.
+    ///
+    /// # Arguments
+    /// * `msg_buf`  – Scratch buffer used for each request/response exchange.
+    /// * `dst_eid`  – EID of the responder endpoint. Currently useless.
+    /// * `output`   – Caller-supplied buffer for the reassembled response.
+    ///                Must be large enough to hold the complete large response
+    ///                (its total size is reported in the first `CHUNK_RESPONSE`).
+    ///
+    /// # Returns
+    /// The number of bytes written into `output` on success.
+    pub fn requester_retrieve_large_response(
+        &mut self,
+        msg_buf: &mut MessageBuf<'a>,
+        dst_eid: u8,
+        output: &mut MessageBuf<'a>,
+    ) -> SpdmResult<usize> {
+        if !self.large_req_context.in_progress() {
+            return Err(SpdmError::InvalidParam);
+        }
+
+        // Peer has to support chunking
+        if self.connection_info().peer_capabilities().flags.chunk_cap() != 1 {
+            return Err(SpdmError::InvalidParam);
+        }
+
+        // THe SPDM header is only present in the first chunk `Chunk 0`.
+        // Hence the first chunks payload data can only be ChunkSize - SPDMHeaderSize.
+        // Since the requester_retrieve_large_response function is called only
+        // once and loops, we know the first chunk must contain the SPDM header.
+        let resp_hdr: SpdmMsgHdr = match self.large_req_context.current_seq_num() {
+            0 => {
+                let resp_hdr = SpdmMsgHdr::decode(msg_buf).map_err(SpdmError::Codec)?;
+                let resp_code = resp_hdr
+                    .req_resp_code()
+                    .map_err(|_| SpdmError::UnsupportedRequest)?;
+
+                if resp_code != ReqRespCode::ChunkResponse {
+                    self.large_req_context.reset();
+                    return Err(SpdmError::InvalidParam);
+                }
+                Ok(resp_hdr)
+            }
+            _ => Err(SpdmError::UnsupportedRequest),
+        }?;
+
+        loop {
+            self.prepare_response_buffer(msg_buf)
+                .map_err(|(_, e)| SpdmError::Command(e))?;
+
+            chunk::request::generate_chunk_get_request(self, msg_buf)
+                .map_err(|(_, e)| SpdmError::Command(e))?;
+            self.requester_send_request(msg_buf, dst_eid)?;
+
+            msg_buf.reset();
+            self.transport
+                .receive_response(msg_buf)
+                .map_err(SpdmError::Transport)?;
+
+            // Process this chunk; copy payload into the caller's buffer.
+            let is_last = chunk::request::handle_chunk_response(self, &resp_hdr, msg_buf, output)
+                .map_err(|(_, e)| SpdmError::Command(e))?;
+
+            if is_last {
+                let total = self.large_req_context.bytes_received();
+                self.large_req_context.reset();
+                return Ok(total);
+            }
+        }
+    }
+
+    /// Perform a large message transfer for messages, that would exceed the peers
+    /// DataTransferSize.
+    /// This requirement has to be evaluated in the client application and this function
+    /// must be called.
+    ///
+    /// This function handles the entire processing an receiving loop transparently.
+    /// That means, based on the `buf` that is passed to the function, containing
+    /// a regular SPDM message of a size that is larger than `DataTransferSize`,
+    /// it will send the according `CHUNK_SEND` requests and parse the `CHUNK_SEND_ACK`
+    /// responses. It also takes care of the context management.
+    ///
+    /// For further detail, see Figure 24 in DSP0274, v1.4.0
+    ///
+    /// # Arguments
+    /// - `buf`: A message buffer containing an encoded SPDM message
+    ///
+    /// # Returns
+    /// - `Ok(())`: Sucessful transfer
+    /// - `Err(CommandError(ChunkError(ChunkErr)))`: A chunking error that occurred.
+    fn requester_send_large_response(&mut self, buf: &mut MessageBuf<'a>) -> CommandResult<()> {
+        let total_message_size = buf.data_len();
+        loop {
+            // let req = generate_chunk_send_request(self, data, req_buf)
+            // Until the data buffer is empty, do:
+            // get chunk_size=DataTransferSize - CHUNK_SEND size (ChunkSendFixed)
+        }
+
+        // cleanup
+        self.large_resp_context.reset();
         Ok(())
     }
 
@@ -197,7 +303,7 @@ impl<'a> SpdmContext<'a> {
             ReqRespCode::GetMeasurements => {
                 measurements::response::handle_get_measurements(self, req_msg_header, req)?
             }
-            ReqRespCode::ChunkGet => chunk_get_rsp::handle_chunk_get(self, req_msg_header, req)?,
+            ReqRespCode::ChunkGet => chunk::response::handle_chunk_get(self, req_msg_header, req)?,
 
             _ => Err((false, CommandError::UnsupportedRequest))?,
         }
@@ -221,11 +327,20 @@ impl<'a> SpdmContext<'a> {
             Err((false, CommandError::UnsupportedRequest))?
         }
 
-        // if req_code != ReqRespCode::ChunkGet && self.large_resp_context.in_progress() {
-        //     // Reset large response context if the request is not a CHUNK_GET
-        //     self.large_resp_context.reset();
-        // }
+        if resp_code != ReqRespCode::ChunkGet && self.large_resp_context.in_progress() {
+            // Reset large response context if the response is not a CHUNK_GET
+            self.large_resp_context.reset();
+        }
 
+        // If a large response retrieval is in progress but we receive anything
+        // other than CHUNK_RESPONSE, the transfer cannot continue.
+        if resp_code != ReqRespCode::ChunkResponse && self.large_req_context.in_progress() {
+            self.large_req_context.reset();
+        }
+
+        // Note
+        // We deliberately ignore RespCode::Chunk*, since this function should *never* handle them.
+        // The processing of these commands shall only be done in requester_retrieve_large_response.
         match resp_code {
             ReqRespCode::Version => handle_version_response(self, resp_msg_header, resp)?,
             ReqRespCode::Capabilities => handle_capabilities_response(self, resp_msg_header, resp)?,
@@ -240,6 +355,31 @@ impl<'a> SpdmContext<'a> {
                 handle_challenge_auth_response(self, resp_msg_header, resp)?
             }
             ReqRespCode::Measurements => handle_measurements_response(self, resp_msg_header, resp)?,
+            ReqRespCode::Error => {
+                let error_resp: ErrorResponse =
+                    ErrorResponse::decode(resp).map_err(|e| (false, CommandError::Codec(e)))?;
+
+                let error_code = ErrorCode::try_from(error_resp.error_code())
+                    .map_err(|_| (false, CommandError::Codec(CodecError::ReadError)))?;
+
+                // TODO: add the other error code handlers
+                match error_code {
+                    ErrorCode::LargeResponse => {
+                        if self.large_req_context.in_progress() {
+                            return Err((true, CommandError::InvalidState));
+                        }
+
+                        let error_data = LargeResponseData::decode(resp)
+                            .map_err(|_| (false, CommandError::Codec(CodecError::ReadError)))?;
+
+                        let handle = error_data.handle() as u8;
+                        self.large_req_context.init(handle);
+                    }
+                    _ => {
+                        todo!();
+                    }
+                }
+            }
             _ => Err((false, CommandError::UnsupportedResponse))?,
         }
 

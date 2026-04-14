@@ -18,7 +18,7 @@ use crate::commands::certificate::{
     encode_certchain_metadata, CertificateRespAttributes, CertificateRespCommon, GetCertificateReq,
     SlotId,
 };
-use crate::commands::error_rsp::ErrorCode;
+use crate::commands::error::ErrorCode;
 use crate::context::SpdmContext;
 use crate::error::{CommandError, CommandResult};
 use crate::protocol::*;

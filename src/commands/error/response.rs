@@ -12,69 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::codec::{Codec, CommonCodec, MessageBuf};
+use crate::codec::{Codec, MessageBuf};
 use crate::error::CommandError;
 use crate::protocol::{ReqRespCode, SpdmMsgHdr, SpdmVersion};
-use zerocopy::{FromBytes, Immutable, IntoBytes};
 
-// SPDM error codes
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum ErrorCode {
-    InvalidRequest = 0x01,
-    Busy = 0x03,
-    UnexpectedRequest = 0x04,
-    Unspecified = 0x05,
-    DecryptError = 0x06,
-    UnsupportedRequest = 0x07,
-    RequestInFlight = 0x08,
-    InvalidResponseCode = 0x09,
-    SessionLimitExceeded = 0x0A,
-    SessionRequired = 0x0B,
-    ResetRequired = 0x0C,
-    ResponseTooLarge = 0x0D,
-    RequestTooLarge = 0x0E,
-    LargeResponse = 0x0F,
-    MessageLost = 0x10,
-    InvalidPolicy = 0x11,
-    VersionMismatch = 0x41,
-    ResponseNotReady = 0x42,
-    RequestResynch = 0x43,
-    OperationFailed = 0x44,
-    NoPendingRequests = 0x45,
-    VendorDefined = 0xFF,
-}
+use crate::commands::error::{ErrorCode, ErrorData, ErrorResponse};
 
-impl From<ErrorCode> for u8 {
-    fn from(code: ErrorCode) -> Self {
-        code as u8
-    }
-}
-
-pub type ErrorData = u8;
-
-#[allow(dead_code)]
-#[derive(FromBytes, IntoBytes, Immutable)]
-pub struct ErrorResponse {
-    error_code: u8,
-    error_data: ErrorData,
-}
-
-impl ErrorResponse {
-    pub fn new(error_code: ErrorCode, error_data: ErrorData) -> Self {
-        Self {
-            error_code: error_code.into(),
-            error_data,
-        }
-    }
-}
-
-impl CommonCodec for ErrorResponse {}
-
+/// Encode an error message identified by [ErrorCode] and [ErrorData] and optional
+/// ExtendedData into a [MessageBuf].
+///
+/// For a list [ErrorCode]s that allow ExtendedData, see [ErrorCode].
 pub fn encode_error_response(
     rsp_buf: &mut MessageBuf,
     spdm_version: SpdmVersion,
     error_code: ErrorCode,
-    error_data: u8,
+    error_data: ErrorData,
     extended_data: Option<&[u8]>,
 ) -> (bool, CommandError) {
     let spdm_hdr = SpdmMsgHdr::new(spdm_version, ReqRespCode::Error);
@@ -119,6 +71,7 @@ pub fn encode_error_response(
 
     // Push data offset up by total payload length
     match rsp_buf.push_data(total_len) {
+        // counter-intuitively, this should signal everything went well.
         Ok(_) => (true, CommandError::ErrorCode(error_code)),
         Err(e) => (false, CommandError::Codec(e)),
     }

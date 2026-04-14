@@ -23,7 +23,7 @@ use crate::state::ConnectionState;
 use crate::transcript::{TranscriptContext, TranscriptManager};
 use crate::{
     codec::{encode_u8_slice, Codec, MessageBuf},
-    commands::error_rsp::ErrorCode,
+    commands::error::ErrorCode,
     context::SpdmContext,
     error::{CommandError, CommandResult, PlatformError},
 };

@@ -35,6 +35,8 @@ pub enum ReqRespCode {
     Measurements = 0x60,
     ChunkGet = 0x86,
     ChunkResponse = 0x06,
+    ChunkSend = 0x85,
+    ChunkSendAck = 0x05,
     Error = 0x7F,
 }
 
@@ -58,6 +60,8 @@ impl TryFrom<u8> for ReqRespCode {
             0x60 => Ok(ReqRespCode::Measurements),
             0x86 => Ok(ReqRespCode::ChunkGet),
             0x06 => Ok(ReqRespCode::ChunkResponse),
+            0x85 => Ok(ReqRespCode::ChunkSend),
+            0x05 => Ok(ReqRespCode::ChunkSendAck),
             0x7F => Ok(ReqRespCode::Error),
             _ => Err(SpdmError::UnsupportedRequest),
         }

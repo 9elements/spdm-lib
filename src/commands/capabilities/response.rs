@@ -13,7 +13,7 @@
 // limitations under the License.
 use super::*;
 use crate::codec::{Codec, MessageBuf};
-use crate::commands::error_rsp::ErrorCode;
+use crate::commands::error::ErrorCode;
 use crate::context::SpdmContext;
 use crate::error::{CommandError, CommandResult};
 use crate::protocol::*;

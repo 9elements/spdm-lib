@@ -22,7 +22,7 @@ use crate::{
     transcript::TranscriptContext,
 };
 
-use crate::commands::error_rsp::ErrorCode;
+use crate::commands::error::ErrorCode;
 use crate::protocol::*;
 
 use core::mem::size_of;
